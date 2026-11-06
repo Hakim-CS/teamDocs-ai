@@ -397,26 +397,25 @@ func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64
 	}
 }
 
-// printSweep shows how recall@k and abstention trade off as MinScore
-// rises. Filtering the unfiltered hits by score is exactly what the
-// retriever's MinScore does.
+// gated applies the retriever's per-query floor to an unfiltered run: a
+// question keeps all its hits when its best score reaches floor, none
+// otherwise. TestGatedMatchesRetrieverAtEveryFloor keeps it equal to
+// rag.Retriever.Search.
+func gated(outs []outcome, scores [][]float64, floor float64) []outcome {
+	out := make([]outcome, len(outs))
+	for i, o := range outs {
+		if len(scores[i]) > 0 && slices.Max(scores[i]) >= floor {
+			out[i] = o
+		}
+	}
+	return out
+}
+
+// printSweep shows how recall@k and abstention trade off as MinScore rises.
 func printSweep(cases []Case, outs []outcome, scores [][]float64) {
 	fmt.Printf("| MinScore | Recall@k | Abstention |\n|---:|---:|---:|\n")
 	for t := 0.30; t <= 0.801; t += 0.025 {
-		filtered := make([]outcome, len(outs))
-		for i, o := range outs {
-			kept := 0
-			for _, s := range scores[i] {
-				if s >= t {
-					kept++
-				}
-			}
-			filtered[i] = outcome{hits: kept}
-			if o.rank > 0 && o.rank <= kept {
-				filtered[i].rank = o.rank
-			}
-		}
-		m := score(cases, filtered)
+		m := score(cases, gated(outs, scores, t))
 		fmt.Printf("| %.3f | %.3f | %.3f |\n", t, m.RecallAtK, m.Abstention)
 	}
 }

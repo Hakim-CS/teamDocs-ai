@@ -45,8 +45,8 @@ type Config struct {
 	EmbeddingQueryPrefix    string
 	EmbeddingDocumentPrefix string
 
-	// MinScore is the cosine-similarity floor for retrieved chunks; see
-	// rag.Options.MinScore. Tuned with cmd/eval.
+	// MinScore is the cosine-similarity floor on a question's best chunk;
+	// see rag.Options.MinScore. Tuned with cmd/eval.
 	MinScore float64
 
 	IngestDir    string

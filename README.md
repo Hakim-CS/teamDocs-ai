@@ -68,15 +68,33 @@ The swapped control is significantly worse, so the eval can detect a prefix mist
 
 Still no gain, so the default stays unprefixed. But the control is weaker evidence now: with short, package-labelled chunks the swapped prefixes are not significantly worse on recall (only the separation AUC drops, 0.977 to 0.930), so this test can no longer show that a wrong prefix hurts ranking.
 
+### Change: the relevance floor gates the question (shipped, no metric change)
+
+The floor used to drop hits one by one. It now looks only at the best hit: if that is below the floor the question counts as out of scope and nothing is returned, otherwise all top-k hits go to the model. Hybrid search will return keyword-only matches that score low on cosine but are still wanted, and a per-hit floor would delete them. Each row ran on the same index and was compared question by question with the per-hit rule at the same floor:
+
+| Floor | Rule | Recall@5 | MRR | Abstention | Recall flips (McNemar p) | Abstention flips (p) |
+| ---: | --- | ---: | ---: | ---: | --- | --- |
+| 0.55 | per hit | 0.709 | 0.524 | 0.533 | | |
+| 0.55 | per query | 0.709 | 0.524 | 0.533 | +0 −0 (1.00) | 0 refused, 0 answered (1.00) |
+| 0.575 | per hit | 0.675 | 0.505 | 0.833 | | |
+| 0.575 | per query | 0.692 | 0.511 | 0.833 | +2 −0 (0.50) | 0 refused, 0 answered (1.00) |
+
+- **Nothing moves at the shipped floor.** At 0.55 both rules agree on all 147 questions, so the baseline is unchanged. The floor stays 0.55: on the dev half the highest floor that loses no in-scope hit is still 0.55 (at 0.575 the per-query rule still loses one dev hit, recall 0.750 against 0.768).
+- **No recall gain is claimed.** The new rule can only keep more hits, never fewer. At 0.575 it recovers 2 of the 4 hits the per-hit floor lost, but two questions cannot be significant (p = 0.50).
+- **It costs prompt size.** At 0.55, 23 weak excerpts (below the floor) now reach the prompt across 116 answered in-scope questions: 5.0 excerpts each, was 4.8. The eval scores retrieval, not answers, so the effect on answers is unmeasured.
+- **The limit is overlap, not the rule.** In-scope best scores run from 0.544 (median 0.664); out-of-scope ones reach 0.622 (median 0.546). Between 0.544 and 0.622 no floor can separate them. A floor of 0.575 would trade 2 in-scope hits (p = 0.50) for 9 more refused out-of-scope questions with none going the other way (p = 0.004). That is a policy choice, so it is not shipped here; it will be revisited when hybrid search changes the scores.
+
+Reproduce with `go run ./cmd/eval -out a.json` on a build before and after the change, then `go run ./cmd/eval -compare a.json b.json` (it now also pairs out-of-scope questions by abstention).
+
 ## How it works
 
 ```text
  ingest:  corpus/*.txt ─▶ chunk (one per go doc declaration; other text ≈1000 B windows) ─▶ embed (batched) ─▶ ReplaceSource (one tx) ─▶ pgvector
- query:   question ─▶ rewrite follow-ups ─▶ embed ─▶ HNSW cosine top-k ─▶ drop hits < min score ─▶ LLM (streamed)
+ query:   question ─▶ rewrite follow-ups ─▶ embed ─▶ HNSW cosine top-k ─▶ refuse if the best hit < min score ─▶ LLM (streamed)
 ```
 
 - **Store:** one Postgres table with an HNSW cosine index and JSONB metadata. Re-ingesting a file replaces its chunks atomically: a failed embed or insert leaves the previous version intact.
-- **Relevance floor:** chunks below `RETRIEVAL_MIN_SCORE` (0.55) are dropped. When nothing survives, the model is told to say the docs don't cover the question. The value is the highest floor that loses no in-scope hit on the *dev* half of the questions (`-split dev -sweep`); the other half is only used for reporting. On the test half it gives recall@5 0.656 and refuses 6 of 14 out-of-scope questions; on all questions it refuses 16 of 30 (11 of the 12 unrelated ones, 5 of the 18 near-domain ones). The gap is a threshold problem, not a ranking one: the best score ranks in-scope above out-of-scope questions 97.7% of the time (AUC), but a floor high enough to refuse more also drops real answers.
+- **Relevance floor:** the floor gates the question, not each hit. When even the best chunk scores below `RETRIEVAL_MIN_SCORE` (0.55), nothing is returned and the model is told to say the docs don't cover the question; otherwise all top-k chunks go to the model. The value is the highest floor that loses no in-scope hit on the *dev* half of the questions (`-split dev -sweep`); the other half is only used for reporting. On the test half it gives recall@5 0.656 and refuses 6 of 14 out-of-scope questions; on all questions it refuses 16 of 30 (11 of the 12 unrelated ones, 5 of the 18 near-domain ones). The gap is a threshold problem, not a ranking one: the best score ranks in-scope above out-of-scope questions 97.7% of the time (AUC), but a floor high enough to refuse more also drops real answers.
 - **Providers:** any OpenAI-compatible endpoint (Ollama, OpenAI, LM Studio, vLLM). Chat and embeddings can point at different hosts.
 - **Interfaces:** terminal REPL, web chat with SSE streaming at `/chat`, document and image upload, `/healthz` and `/readyz`.
 
@@ -138,7 +156,7 @@ TEST_DATABASE_URL=postgres://rag:eval@localhost:5433/rag_eval?sslmode=disable go
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | Embedding endpoint; defaults to the chat endpoint. |
 | `EMBEDDING_DIM` | Must match the embedding model (768 for `nomic-embed-text`). Fixed into the schema on first run. |
 | `EMBEDDING_QUERY_PREFIX`, `EMBEDDING_DOCUMENT_PREFIX` | Text prepended before embedding (default none; see the prefix experiment). |
-| `RETRIEVAL_MIN_SCORE` | Similarity floor for retrieved chunks (default 0.55, 0 disables). |
+| `RETRIEVAL_MIN_SCORE` | Similarity floor on the best retrieved chunk: below it the question counts as out of scope (default 0.55, 0 disables). |
 | `DATABASE_URL`, `POSTGRES_PASSWORD` | App database; the compose file reads the password. |
 | `EVAL_DATABASE_URL` | Eval database (truncated on every run). |
 | `SYSTEM_PROMPT_FILE` | System prompt, default `prompts/system-custom.md`. |
@@ -178,7 +196,7 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 
 - **The client owns the conversation history.** The server rejects client-sent `system` messages, but a client can still forge `assistant` turns. Server-side sessions would close this.
 - **Uploads are unauthenticated**, and uploaded documents are retrieved into the prompt, so a malicious document can attempt indirect prompt injection. The regex filter in `web/injection.go` is a tripwire, not a security boundary. Bind to `127.0.0.1` (the default).
-- Abstention is measured on 30 out-of-scope questions. At the current floor, in-scope and near-domain questions score too close together to separate cleanly: raising the floor to 0.575 refuses 24 of 30 but drops recall@5 from 0.709 to 0.675.
+- Abstention is measured on 30 out-of-scope questions. At the current floor, in-scope and near-domain questions score too close together to separate cleanly: raising the floor to 0.575 refuses 25 of 30 but drops recall@5 from 0.709 to 0.692 (0.675 with a per-hit floor). Query vectors from Ollama drift slightly between sessions: one question crossed 0.575 between two runs on the same index, so treat counts at a floor as ±1 question.
 - Only `go doc` text is split on declarations. Other documents (uploads, notes) still use byte windows, and the overlap start isn't snapped to a word boundary.
 - Declaration chunks are small (median 297 bytes, was 905), so each excerpt gives the model less surrounding context. The eval scores retrieval, not answers, and an answer-level eval is still missing.
 - Conversation history is in memory only.
@@ -187,11 +205,10 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 
 Each step is judged by the eval, not by intuition:
 
-1. **Per-query relevance floor:** decide in-scope or not from the best hit, instead of dropping hits one by one, so a keyword-only match survives once hybrid search lands.
-2. **Hybrid retrieval:** Postgres full-text search fused with vector search via Reciprocal Rank Fusion. Targets the misses on exact identifiers (`func Atoi`, `ErrNoRows`).
-3. **Experiments:** other embedding models, and an LLM rerank of the top 20. Each ships only if `-compare` shows a significant gain.
-4. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
-5. **Server-side sessions, upload auth, rate limiting.**
+1. **Hybrid retrieval:** Postgres full-text search fused with vector search via Reciprocal Rank Fusion. Targets the misses on exact identifiers (`func Atoi`, `ErrNoRows`).
+2. **Experiments:** other embedding models, and an LLM rerank of the top 20. Each ships only if `-compare` shows a significant gain.
+3. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
+4. **Server-side sessions, upload auth, rate limiting.**
 
 ## License
 

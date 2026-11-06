@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"godocs-rag/rag"
+	"godocs-rag/vector"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -47,5 +50,67 @@ func TestJudgeMarksRightFileWrongPassage(t *testing.T) {
 	}
 	if o := judge(c, []rag.SearchResult{{Source: "io.txt", Content: "Getenv"}}); o.sourceHit {
 		t.Fatal("sourceHit = true for a wrong-file miss")
+	}
+}
+
+// stubEmbedder tags each query with its position in questions, and
+// stubStore answers with that question's canned hits.
+type stubEmbedder struct{ questions []string }
+
+func (stubEmbedder) EmbedDocuments(_ context.Context, texts []string) ([][]float32, error) {
+	return make([][]float32, len(texts)), nil
+}
+func (e stubEmbedder) EmbedQuery(_ context.Context, q string) ([]float32, error) {
+	return []float32{float32(slices.Index(e.questions, q))}, nil
+}
+func (stubEmbedder) Scheme() string { return "stub" }
+
+type stubStore struct{ hits [][]vector.Result }
+
+func (stubStore) ReplaceSource(context.Context, string, []vector.Document) error { return nil }
+func (s stubStore) Query(_ context.Context, vec []float32, _ int) ([]vector.Result, error) {
+	return s.hits[int(vec[0])], nil
+}
+func (stubStore) Close() error { return nil }
+
+// The sweep gates one unfiltered run instead of querying again at every
+// floor. That only measures what ships while it agrees with the retriever,
+// so check the two against each other at floors on both sides of every score.
+func TestGatedMatchesRetrieverAtEveryFloor(t *testing.T) {
+	cases := []Case{
+		{Question: "strong", Source: "a.txt", Contains: "answer"},
+		{Question: "right passage is weak", Source: "a.txt", Contains: "answer"},
+		{Question: "out of scope"},
+	}
+	hit := func(id, source, content string, score float32) vector.Result {
+		return vector.Result{
+			Document: vector.Document{ID: id, Content: content, Metadata: map[string]string{"source": source}},
+			Score:    score,
+		}
+	}
+	store := stubStore{hits: [][]vector.Result{
+		{hit("a#0", "a.txt", "the answer", 0.8), hit("b#0", "b.txt", "noise", 0.6)},
+		{hit("b#1", "b.txt", "noise", 0.6), hit("a#5", "a.txt", "the answer", 0.5)},
+		{hit("c#0", "c.txt", "noise", 0.52)},
+	}}
+	embedder := stubEmbedder{questions: []string{cases[0].Question, cases[1].Question, cases[2].Question}}
+	ctx := context.Background()
+
+	raw, scores, err := runCases(ctx, rag.New(embedder, store, rag.Options{}), cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, floor := range []float64{0, 0.45, 0.51, 0.55, 0.61, 0.7, 0.81} {
+		real, _, err := runCases(ctx, rag.New(embedder, store, rag.Options{MinScore: floor}), cases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := gated(raw, scores, floor)
+		for i, want := range real {
+			if got[i].rank != want.rank || got[i].hits != want.hits {
+				t.Errorf("floor %.2f, %q: gated rank/hits = %d/%d, retriever = %d/%d",
+					floor, cases[i].Question, got[i].rank, got[i].hits, want.rank, want.hits)
+			}
+		}
 	}
 }

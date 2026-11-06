@@ -12,9 +12,10 @@ import (
 )
 
 // Two eval runs answer the same questions, so they are compared pairwise:
-// McNemar's exact test on per-question recall hits, and a bootstrap over
-// questions for MRR. AUC measures how well the best similarity separates
-// in-scope from out-of-scope questions, independent of any floor.
+// McNemar's exact test on per-question recall hits and on out-of-scope
+// abstentions, and a bootstrap over questions for MRR. AUC measures how
+// well the best similarity separates in-scope from out-of-scope questions,
+// independent of any floor.
 
 // CaseResult is one question's outcome, written by -out.
 type CaseResult struct {
@@ -35,6 +36,8 @@ type comparison struct {
 	Lost, Gained          []string // in-scope questions whose recall@k hit flipped
 	P                     float64  // McNemar exact, two-sided
 	MRRDiff, MRRLo, MRRHi float64  // b - a, paired bootstrap 95% CI
+	Refused, Answered     []string // out-of-scope questions A answered and B refused, and the reverse
+	AbstainP              float64  // McNemar exact on those flips
 	AUCa, AUCb            float64
 }
 
@@ -54,6 +57,12 @@ func compare(a, b Results) (comparison, error) {
 			return comparison{}, fmt.Errorf("%q is not in both runs with the same label", cb.Question)
 		}
 		if cb.Source == "" {
+			switch answeredA, answeredB := ca.Hits > 0, cb.Hits > 0; {
+			case answeredA && !answeredB:
+				cmp.Refused = append(cmp.Refused, cb.Question)
+			case !answeredA && answeredB:
+				cmp.Answered = append(cmp.Answered, cb.Question)
+			}
 			continue
 		}
 		switch hitA, hitB := ca.Rank > 0, cb.Rank > 0; {
@@ -66,6 +75,7 @@ func compare(a, b Results) (comparison, error) {
 		rrB = append(rrB, reciprocalRank(cb.Rank))
 	}
 	cmp.P = mcnemarExact(len(cmp.Lost), len(cmp.Gained))
+	cmp.AbstainP = mcnemarExact(len(cmp.Refused), len(cmp.Answered))
 	cmp.MRRDiff, cmp.MRRLo, cmp.MRRHi = bootstrapMeanDiff(rrA, rrB, 10000, 1)
 	cmp.AUCa, cmp.AUCb = separation(a.Cases), separation(b.Cases)
 	return cmp, nil
@@ -183,14 +193,23 @@ func runCompare(pathA, pathB string) error {
 	fmt.Printf("| | A | B |\n|---|---:|---:|\n")
 	fmt.Printf("| Recall@%d | %.3f | %.3f |\n", a.Settings.K, a.Settings.RecallAtK, b.Settings.RecallAtK)
 	fmt.Printf("| MRR | %.3f | %.3f |\n", a.Settings.MRR, b.Settings.MRR)
+	fmt.Printf("| Abstention | %.3f | %.3f |\n", a.Settings.Abstention, b.Settings.Abstention)
 	fmt.Printf("| Separation AUC | %.3f | %.3f |\n\n", cmp.AUCa, cmp.AUCb)
 	fmt.Printf("Recall flips: %d gained, %d lost · McNemar exact p = %.4f\n", len(cmp.Gained), len(cmp.Lost), cmp.P)
 	fmt.Printf("MRR difference (B-A): %+.3f, 95%% CI [%+.3f, %+.3f]\n", cmp.MRRDiff, cmp.MRRLo, cmp.MRRHi)
+	fmt.Printf("Abstention flips (out-of-scope): %d now refused, %d now answered · McNemar exact p = %.4f\n",
+		len(cmp.Refused), len(cmp.Answered), cmp.AbstainP)
 	for _, q := range cmp.Gained {
 		fmt.Printf("- gained: %s\n", q)
 	}
 	for _, q := range cmp.Lost {
 		fmt.Printf("- lost: %s\n", q)
+	}
+	for _, q := range cmp.Refused {
+		fmt.Printf("- now refused: %s\n", q)
+	}
+	for _, q := range cmp.Answered {
+		fmt.Printf("- now answered: %s\n", q)
 	}
 	return nil
 }

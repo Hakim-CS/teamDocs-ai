@@ -78,3 +78,36 @@ func TestCompareListsFlips(t *testing.T) {
 		t.Fatal("want an error when the question sets differ")
 	}
 }
+
+// An out-of-scope question is abstained when the floor left it no hits.
+// Its flips are paired like recall flips; in-scope questions never count.
+func TestCompareListsAbstentionFlips(t *testing.T) {
+	a := Results{Cases: []CaseResult{
+		{Question: "refused 1", Hits: 3},
+		{Question: "refused 2", Hits: 2},
+		{Question: "refused 3", Hits: 1},
+		{Question: "answered 1", Hits: 0},
+		{Question: "still answered", Hits: 2},
+		{Question: "still refused", Hits: 0},
+		{Question: "in scope", Source: "a.txt", Rank: 1, Hits: 5},
+	}}
+	b := Results{Cases: []CaseResult{
+		{Question: "refused 1", Hits: 0},
+		{Question: "refused 2", Hits: 0},
+		{Question: "refused 3", Hits: 0},
+		{Question: "answered 1", Hits: 4},
+		{Question: "still answered", Hits: 5},
+		{Question: "still refused", Hits: 0},
+		{Question: "in scope", Source: "a.txt", Rank: 0, Hits: 0},
+	}}
+	cmp, err := compare(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmp.Refused, []string{"refused 1", "refused 2", "refused 3"}) || !slices.Equal(cmp.Answered, []string{"answered 1"}) {
+		t.Fatalf("refused %q, answered %q", cmp.Refused, cmp.Answered)
+	}
+	if want := mcnemarExact(3, 1); cmp.AbstainP != want {
+		t.Fatalf("AbstainP = %v, want %v", cmp.AbstainP, want)
+	}
+}
