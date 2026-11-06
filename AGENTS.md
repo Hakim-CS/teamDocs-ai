@@ -20,7 +20,7 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 ## Layout and flow
 
 - `cmd/rag` → `app.Run`: wires `llm` clients, `vector/pgvector` store, `ingest.Watch`, `web.Server`, `chat.RunREPL`.
-- `ingest.index` is the single chunk → embed → `store.ReplaceSource` path for text and images.
+- `ingest.index` is the single chunk → embed → `store.ReplaceSource` path for text and images. `go doc` text is split per declaration (`chunkGoDoc`, every chunk led by the package line); anything else uses the byte-window `chunk`.
 - `rag.Retriever.Search` handles rewrite → `EmbedQuery` → `store.Query` → `MinScore` filter. Documents go through `EmbedDocuments`; each chunk records `embed_scheme` (model + document prefix), and the eval refuses a mixed index. `rag.WithContext` prepends excerpts to the last user turn (shared by REPL and web).
 - `vector.Store` has only `ReplaceSource`, `Query` and `Close`. Don't add methods nothing calls. `pgvector.Store.Reset` is eval-only.
 - `cmd/eval` uses the same `rag.Retriever` the app uses. **The eval must test what ships.** Don't give it a separate retrieval path.
@@ -48,4 +48,4 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 
 ## Roadmap (next, in order)
 
-Declaration-aware chunking (then re-test nomic prefixes: no significant gain at byte chunking) → hybrid FTS + vector with RRF → verified structured citations → server-side sessions, upload auth and rate limiting. Each one must move the eval numbers.
+Per-query relevance floor → hybrid FTS + vector with RRF → embedding-model bake-off and LLM-rerank experiments (each ships only with `-compare` evidence) → verified structured citations → server-side sessions, upload auth and rate limiting. Each one must move the eval numbers.

@@ -6,24 +6,43 @@ Generic chatbots confidently invent Go APIs. This project answers from the actua
 
 ## Current results
 
-Measured by `go run ./cmd/eval` over 117 in-scope and 30 out-of-scope questions (`eval/golden.jsonl`), 25 stdlib packages / 832 chunks, `nomic-embed-text`, k=5:
+Measured by `go run ./cmd/eval` over 117 in-scope and 30 out-of-scope questions (`eval/golden.jsonl`), 25 stdlib packages / 1,923 chunks, `nomic-embed-text`, k=5:
 
 | Metric | Value |
 | --- | ---: |
-| Recall@1 | 0.299 |
-| Recall@5 | 0.564 |
-| MRR@5 | 0.405 |
-| Out-of-scope abstention | 0.500 |
-| Misses: right file / wrong file | 50 / 1 |
+| Recall@1 | 0.402 |
+| Recall@5 | 0.709 |
+| MRR@5 | 0.524 |
+| Out-of-scope abstention | 0.533 |
+| Misses: right file / wrong file | 29 / 5 |
 | Separation AUC (best score, in- vs out-of-scope) | 0.977 |
-| Query latency p50 / p95 (embed + search, local Ollama) | 28 ms / 122 ms |
+| Query latency p50 / p95 (embed + search, local Ollama) | 27 ms / 32 ms |
 
-These are honest baseline numbers for plain vector search, not a finished system. The eval shows *where* it fails:
+These are honest numbers for dense vector search over declaration-aware chunks, not a finished system. The eval shows *where* it still fails:
 
-- **Ranking, not coverage.** 50 of the 51 misses retrieve the right file but rank the wrong passage higher, because dense `go doc` signature listings embed alike.
+- **Mostly ranking.** 29 of the 34 misses retrieve the right file but rank the wrong passage higher. The other 5 retrieve a different file altogether (it was 1 before the chunking change, see below).
 - **Near-domain questions.** Only 5 of the 18 questions about libraries and tools these packages don't document (errgroup, YAML, bcrypt, pprof) are refused; they score as close to the docs as real questions do.
 
 That is what the next retrieval changes target (see [Roadmap](#roadmap)), and the gate makes each one prove itself.
+
+### Change: declaration-aware chunking (shipped)
+
+`go doc` output is split into one chunk per declaration (a function, method, type, or const/var block with its doc comment), and every chunk starts with the `package x // import "x"` line. Byte windows cut across neighbouring signatures, so dense listings all embed alike. Each variant was measured with a full re-index and no relevance floor, so only ranking differs, and compared question by question against the old byte windows:
+
+| Chunking | Chunks | Recall@1 | Recall@5 | MRR | Separation AUC | vs byte windows: recall@5 flips (McNemar p) | MRR Δ, 95% bootstrap CI |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| Byte windows (before) | 832 | 0.299 | 0.573 | 0.410 | 0.977 | | |
+| Windows + package line | 863 | 0.368 | 0.684 | 0.468 | 0.966 | +18 −5 (0.011) | +0.058 [+0.002, +0.111] |
+| Declarations, no package line | 1,907 | 0.325 | 0.573 | 0.412 | 0.963 | +20 −20 (1.00) | +0.003 [−0.084, +0.090] |
+| **Declarations + package line (shipped)** | 1,923 | 0.402 | 0.709 | 0.524 | 0.977 | +25 −9 (0.009) | +0.114 [+0.026, +0.198] |
+
+- **The package line does the work.** Splitting alone changes nothing on average (20 questions gained, 20 lost): a short chunk without its package is easy to confuse with a similar function from another package.
+- **Splitting on top of the package line is not proven.** It adds +0.056 MRR over windows with the line, but not significantly (recall@5 flips +13 −10, p = 0.68; CI [−0.011, +0.126]). It stays because it scored higher on every metric and gives hybrid search and citations one declaration per chunk. A one-line "package line on every window" is the simpler alternative.
+- **Recall@1 alone is weaker evidence:** +26 −14 against byte windows (p = 0.081). The gain is in recall@5 and MRR.
+- **It costs something.** 9 questions got worse (25 got better), and wrong-file misses went from 1 to 5. Short chunks whose names echo the question (`MarshalBinary` for "binary", `Exit` for "program exit") now outrank the package overview or `Flush`. Chunks are also smaller (median 297 bytes, was 905), so each excerpt gives the model less context. The eval scores retrieval, not answers.
+- The relevance floor stays 0.55: on the dev half, recall is flat up to 0.55 and drops at 0.575. The same run twice is identical (0 flips).
+
+The two ablation rows are throwaway builds with one line of the chunker changed, not code in this repo. Reproduce the headline rows with `go run ./cmd/eval -min-score 0 -out a.json` on each side of the change, then `go run ./cmd/eval -compare a.json b.json`.
 
 ### Experiment: embedding task prefixes (no significant gain, not shipped)
 
@@ -37,17 +56,27 @@ That is what the next retrieval changes target (see [Roadmap](#roadmap)), and th
 | **Both, as documented** (run twice: identical) | 0.342 | 0.564 | 0.421 | 0.978 | +8 −3 (0.23) | +0.012 [−0.027, +0.051] |
 | Swapped (negative control) | 0.231 | 0.573 | 0.356 | 0.929 | +1 −9 (**0.02**) | **−0.053 [−0.093, −0.016]** |
 
-The swapped control is significantly worse, so the eval can detect a prefix mistake. The documented prefixes lean better at rank 1 but no difference is significant, so the default stays unprefixed. The prefixes remain switchable (`EMBEDDING_QUERY_PREFIX`, `EMBEDDING_DOCUMENT_PREFIX`) and will be re-tested after the chunking change, since 50 of 51 misses are passage-ranking problems that prefixes can't fix. Reproduce with `go run ./cmd/eval -min-score 0 -out a.json` per variant and `go run ./cmd/eval -compare a.json b.json`.
+The swapped control is significantly worse, so the eval can detect a prefix mistake. The documented prefixes lean better at rank 1 but no difference is significant, so the default stays unprefixed. The prefixes remain switchable (`EMBEDDING_QUERY_PREFIX`, `EMBEDDING_DOCUMENT_PREFIX`). Reproduce with `go run ./cmd/eval -min-score 0 -out a.json` per variant and `go run ./cmd/eval -compare a.json b.json`.
+
+**Re-test after declaration-aware chunking** (same method, 1,923 chunks):
+
+| Variant | Recall@1 | Recall@5 | MRR | Separation AUC | vs none: R@1 flips (McNemar p) | MRR Δ, 95% bootstrap CI |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| No prefix (run twice: identical) | 0.402 | 0.709 | 0.524 | 0.977 | | |
+| Both, as documented | 0.410 | 0.684 | 0.508 | 0.977 | +5 −4 (1.00) | −0.016 [−0.052, +0.020] |
+| Swapped (negative control) | 0.419 | 0.667 | 0.516 | 0.930 | +7 −5 (0.77) | −0.008 [−0.050, +0.035] |
+
+Still no gain, so the default stays unprefixed. But the control is weaker evidence now: with short, package-labelled chunks the swapped prefixes are not significantly worse on recall (only the separation AUC drops, 0.977 to 0.930), so this test can no longer show that a wrong prefix hurts ranking.
 
 ## How it works
 
 ```text
- ingest:  corpus/*.txt ─▶ chunk (≈1000 B, boundary-aware) ─▶ embed (batched) ─▶ ReplaceSource (one tx) ─▶ pgvector
+ ingest:  corpus/*.txt ─▶ chunk (one per go doc declaration; other text ≈1000 B windows) ─▶ embed (batched) ─▶ ReplaceSource (one tx) ─▶ pgvector
  query:   question ─▶ rewrite follow-ups ─▶ embed ─▶ HNSW cosine top-k ─▶ drop hits < min score ─▶ LLM (streamed)
 ```
 
 - **Store:** one Postgres table with an HNSW cosine index and JSONB metadata. Re-ingesting a file replaces its chunks atomically: a failed embed or insert leaves the previous version intact.
-- **Relevance floor:** chunks below `RETRIEVAL_MIN_SCORE` (0.55) are dropped. When nothing survives, the model is told to say the docs don't cover the question. The value is the highest floor that loses no in-scope hit on the *dev* half of the questions (`-split dev -sweep`); the other half is only used for reporting. On the test half it gives recall@5 0.623 and refuses 5 of 14 out-of-scope questions; on all questions it refuses 15 of 30 (10 of the 12 unrelated ones, 5 of the 18 near-domain ones). The gap is a threshold problem, not a ranking one: the best score ranks in-scope above out-of-scope questions 97.7% of the time (AUC), but a floor high enough to refuse more also drops real answers.
+- **Relevance floor:** chunks below `RETRIEVAL_MIN_SCORE` (0.55) are dropped. When nothing survives, the model is told to say the docs don't cover the question. The value is the highest floor that loses no in-scope hit on the *dev* half of the questions (`-split dev -sweep`); the other half is only used for reporting. On the test half it gives recall@5 0.656 and refuses 6 of 14 out-of-scope questions; on all questions it refuses 16 of 30 (11 of the 12 unrelated ones, 5 of the 18 near-domain ones). The gap is a threshold problem, not a ranking one: the best score ranks in-scope above out-of-scope questions 97.7% of the time (AUC), but a floor high enough to refuse more also drops real answers.
 - **Providers:** any OpenAI-compatible endpoint (Ollama, OpenAI, LM Studio, vLLM). Chat and embeddings can point at different hosts.
 - **Interfaces:** terminal REPL, web chat with SSE streaming at `/chat`, document and image upload, `/healthz` and `/readyz`.
 
@@ -149,18 +178,20 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 
 - **The client owns the conversation history.** The server rejects client-sent `system` messages, but a client can still forge `assistant` turns. Server-side sessions would close this.
 - **Uploads are unauthenticated**, and uploaded documents are retrieved into the prompt, so a malicious document can attempt indirect prompt injection. The regex filter in `web/injection.go` is a tripwire, not a security boundary. Bind to `127.0.0.1` (the default).
-- Abstention is measured on 30 out-of-scope questions. At the current floor, in-scope and near-domain questions score too close together to separate cleanly: raising the floor to 0.575 refuses 25 of 30 but drops recall@5 from 0.564 to 0.538.
-- Chunks are byte windows; the overlap start isn't snapped to a word boundary.
+- Abstention is measured on 30 out-of-scope questions. At the current floor, in-scope and near-domain questions score too close together to separate cleanly: raising the floor to 0.575 refuses 24 of 30 but drops recall@5 from 0.709 to 0.675.
+- Only `go doc` text is split on declarations. Other documents (uploads, notes) still use byte windows, and the overlap start isn't snapped to a word boundary.
+- Declaration chunks are small (median 297 bytes, was 905), so each excerpt gives the model less surrounding context. The eval scores retrieval, not answers, and an answer-level eval is still missing.
 - Conversation history is in memory only.
 
 ## Roadmap
 
 Each step is judged by the eval, not by intuition:
 
-1. **Hybrid retrieval:** Postgres full-text search fused with vector search via Reciprocal Rank Fusion. Targets the misses on exact identifiers (`func Atoi`, `ErrNoRows`).
-2. **Embedding task prefixes and chunking:** `nomic-embed-text` expects `search_query:` / `search_document:` prefixes, which aren't applied yet. Also chunk on `go doc` declaration boundaries.
-3. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
-4. **Server-side sessions, upload auth, rate limiting.**
+1. **Per-query relevance floor:** decide in-scope or not from the best hit, instead of dropping hits one by one, so a keyword-only match survives once hybrid search lands.
+2. **Hybrid retrieval:** Postgres full-text search fused with vector search via Reciprocal Rank Fusion. Targets the misses on exact identifiers (`func Atoi`, `ErrNoRows`).
+3. **Experiments:** other embedding models, and an LLM rerank of the top 20. Each ships only if `-compare` shows a significant gain.
+4. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
+5. **Server-side sessions, upload auth, rate limiting.**
 
 ## License
 

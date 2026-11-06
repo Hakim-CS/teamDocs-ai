@@ -1,8 +1,8 @@
 {
-  "recall_at_1": 0.29914529914529914,
-  "recall_at_k": 0.5641025641025641,
-  "mrr": 0.4054131054131055,
-  "abstention": 0.5,
+  "recall_at_1": 0.4017094017094017,
+  "recall_at_k": 0.7094017094017094,
+  "mrr": 0.5236467236467237,
+  "abstention": 0.5333333333333333,
   "k": 5,
   "min_score": 0.55,
   "embedding_model": "nomic-embed-text",

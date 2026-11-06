@@ -74,7 +74,11 @@ func index(ctx context.Context, source, text string, extra map[string]string, op
 		overlap = defaultChunkOverlap
 	}
 
-	chunks := chunk(text, size, overlap)
+	split := chunk
+	if isGoDoc(text) {
+		split = chunkGoDoc
+	}
+	chunks := split(text, size, overlap)
 	if len(chunks) == 0 {
 		return 0, errors.New("document is empty")
 	}
