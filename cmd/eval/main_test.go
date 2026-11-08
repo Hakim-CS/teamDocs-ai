@@ -53,6 +53,28 @@ func TestJudgeMarksRightFileWrongPassage(t *testing.T) {
 	}
 }
 
+// The index agrees with an exact scan when both return the same scores in
+// the same order. Ties may come back in a different order, so ids are not
+// compared.
+func TestSameScores(t *testing.T) {
+	r := func(scores ...float32) []vector.Result {
+		out := make([]vector.Result, len(scores))
+		for i, s := range scores {
+			out[i] = vector.Result{Score: s}
+		}
+		return out
+	}
+	if !sameScores(r(0.9, 0.8), r(0.9, 0.8000001)) {
+		t.Error("scores within 1e-6 should agree")
+	}
+	if sameScores(r(0.9, 0.8), r(0.9, 0.7)) {
+		t.Error("a different second score should disagree")
+	}
+	if sameScores(r(0.9, 0.8), r(0.9)) {
+		t.Error("a missing hit should disagree")
+	}
+}
+
 // stubEmbedder tags each query with its position in questions, and
 // stubStore answers with that question's canned hits.
 type stubEmbedder struct{ questions []string }

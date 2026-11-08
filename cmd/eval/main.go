@@ -24,7 +24,9 @@ import (
 	"godocs-rag/ingest"
 	"godocs-rag/llm"
 	"godocs-rag/rag"
+	"godocs-rag/vector"
 	"godocs-rag/vector/pgvector"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -172,6 +174,10 @@ func run(o options) error {
 		printSweep(cases, rawOuts, scores)
 		return nil
 	}
+	agree, err := indexAgreement(ctx, store, embedder, cases, o.k)
+	if err != nil {
+		return err
+	}
 
 	retriever := rag.New(embedder, store, rag.Options{TopK: o.k, MinScore: o.minScore})
 	outs, _, err := runCases(ctx, retriever, cases)
@@ -183,7 +189,7 @@ func run(o options) error {
 		Scheme: embedder.Scheme(), QueryPrefix: cfg.EmbeddingQueryPrefix, Cases: len(cases),
 	}
 	results := Results{Settings: cur, Cases: caseResults(cases, outs, scores)}
-	printReport(cur, cases, outs, separation(results.Cases))
+	printReport(cur, cases, outs, separation(results.Cases), agree)
 
 	if o.out != "" {
 		if err := writeResults(o.out, results); err != nil {
@@ -356,7 +362,7 @@ func score(cases []Case, outs []outcome) Metrics {
 	return m
 }
 
-func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64) {
+func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64, indexAgree int) {
 	lat := make([]time.Duration, len(outs))
 	for i, o := range outs {
 		lat[i] = o.latency
@@ -390,7 +396,11 @@ func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64
 	fmt.Printf("| Abstention (out-of-scope) | %.3f |\n", b.Abstention)
 	fmt.Printf("| Misses (right file / wrong file) | %d / %d |\n", rightFile, wrongFile)
 	fmt.Printf("| Separation AUC (best score, in- vs out-of-scope) | %.3f |\n", separationAUC)
+	fmt.Printf("| Index matches exact search (top-%d scores) | %d / %d |\n", b.K, indexAgree, len(cases))
 	fmt.Printf("| Latency p50 / p95 | %s / %s |\n", pct(0.5), pct(0.95))
+	if indexAgree < len(cases) {
+		fmt.Printf("\n**Warning:** the index returned different top-%d scores than a sequential scan for %d questions, so the numbers above depend on the index graph, not only on the embeddings and chunking.\n", b.K, len(cases)-indexAgree)
+	}
 
 	if len(misses) > 0 {
 		fmt.Printf("\n<details><summary>%d failures</summary>\n\n%s\n\n</details>\n", len(misses), strings.Join(misses, "\n"))
@@ -409,6 +419,38 @@ func gated(outs []outcome, scores [][]float64, floor float64) []outcome {
 		}
 	}
 	return out
+}
+
+// sameScores reports whether two result lists have the same scores in the
+// same order. Equal scores mean equal results up to ties, which may come
+// back in a different order.
+func sameScores(a, b []vector.Result) bool {
+	return slices.EqualFunc(a, b, func(x, y vector.Result) bool { return math.Abs(float64(x.Score-y.Score)) < 1e-6 })
+}
+
+// indexAgreement counts the questions for which the index returns the same
+// top-k scores as an exact scan. Fewer than len(cases) means the numbers
+// depend on the index graph, not only on the embeddings and chunking.
+func indexAgreement(ctx context.Context, store *pgvector.Store, embedder llm.Embedder, cases []Case, k int) (int, error) {
+	agree := 0
+	for _, c := range cases {
+		vec, err := embedder.EmbedQuery(ctx, c.Question)
+		if err != nil {
+			return 0, fmt.Errorf("%q: %w", c.Question, err)
+		}
+		got, err := store.Query(ctx, vec, k)
+		if err != nil {
+			return 0, err
+		}
+		want, err := store.QueryExact(ctx, vec, k)
+		if err != nil {
+			return 0, err
+		}
+		if sameScores(got, want) {
+			agree++
+		}
+	}
+	return agree, nil
 }
 
 // printSweep shows how recall@k and abstention trade off as MinScore rises.

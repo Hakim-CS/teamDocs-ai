@@ -22,7 +22,7 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 - `cmd/rag` → `app.Run`: wires `llm` clients, `vector/pgvector` store, `ingest.Watch`, `web.Server`, `chat.RunREPL`.
 - `ingest.index` is the single chunk → embed → `store.ReplaceSource` path for text and images. `go doc` text is split per declaration (`chunkGoDoc`, every chunk led by the package line); anything else uses the byte-window `chunk`.
 - `rag.Retriever.Search` handles rewrite → `EmbedQuery` → `store.Query` → `MinScore` gate: if even the best hit is below it nothing is returned, otherwise every hit is. Documents go through `EmbedDocuments`; each chunk records `embed_scheme` (model + document prefix), and the eval refuses a mixed index. `rag.WithContext` prepends excerpts to the last user turn (shared by REPL and web).
-- `vector.Store` has only `ReplaceSource`, `Query` and `Close`. Don't add methods nothing calls. `pgvector.Store.Reset` is eval-only.
+- `vector.Store` has only `ReplaceSource`, `Query` and `Close`. Don't add methods nothing calls. `pgvector.Store.Reset` and `QueryExact` (a sequential scan, the ground truth for the index check) are eval-only.
 - `cmd/eval` uses the same `rag.Retriever` the app uses. **The eval must test what ships.** Don't give it a separate retrieval path.
 
 ## Eval rules (the core of the project)
@@ -33,6 +33,7 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 - `config.DefaultMinScore` (0.55) was chosen with `-split dev -sweep` (highest floor losing no dev in-scope hit) and reported on `-split test`. If retrieval changes, re-sweep and update both the constant and the baseline.
 - Claim an improvement only with `-compare` evidence (McNemar / bootstrap CI), never from one aggregate number.
 - `corpus/` and `eval/` are pinned to LF (`.gitattributes`). CRLF would change chunk boundaries and therefore the numbers.
+- The eval report has a row `Index matches exact search (top-5 scores) N / N`. Below N / N the numbers depend on the index (the planner's choice between a sequential scan and the HNSW graph, and how the graph was built), not only on embeddings and chunking: re-ingest (run without `-skip-ingest`) before trusting small differences. The store runs with `hnsw.ef_search` 800 so this holds after churn. Still pair only runs made on the same index state, and keep DB tests off the eval database.
 
 ## Conventions
 
@@ -48,4 +49,4 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 
 ## Roadmap (next, in order)
 
-Hybrid FTS + vector with RRF → embedding-model bake-off and LLM-rerank experiments (each ships only with `-compare` evidence) → verified structured citations → server-side sessions, upload auth and rate limiting. Each one must move the eval numbers.
+Make the eval independent of the HNSW graph (`ef_search` or exact scan, then re-baseline) → hybrid FTS + vector with RRF, second attempt (the first failed its ship rule; add an identifier-style eval slice first, see README) → embedding-model bake-off and LLM-rerank experiments (each ships only with `-compare` evidence) → verified structured citations → server-side sessions, upload auth and rate limiting. Each one must move the eval numbers.

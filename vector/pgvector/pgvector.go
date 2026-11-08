@@ -20,6 +20,13 @@ import (
 	pgxvec "github.com/pgvector/pgvector-go/pgx"
 )
 
+// efSearch is hnsw.ef_search on every connection. pgvector's default of 40
+// returned a different top-5 than exact search for 7-10% of the eval
+// questions whenever the index was used, and which questions changed with
+// how the graph was built. 400 matched exact search on every index state
+// tried; 800 keeps a margin. See README.
+const efSearch = 800
+
 type Options struct {
 	// DSN is a libpq-style connection string.
 	DSN          string
@@ -51,7 +58,11 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		return pgxvec.RegisterTypes(ctx, conn)
+		if err := pgxvec.RegisterTypes(ctx, conn); err != nil {
+			return err
+		}
+		_, err := conn.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", efSearch))
+		return err
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
@@ -148,8 +159,34 @@ func (s *Store) Query(ctx context.Context, embedding []float32, topK int) ([]vec
 	if topK <= 0 {
 		return nil, nil
 	}
+	return topByCosine(ctx, s.pool, embedding, topK)
+}
 
-	rows, err := s.pool.Query(ctx, `
+// QueryExact is Query without the HNSW index: a sequential scan, which
+// cannot miss a neighbour. Eval-only: it checks that retrieval does not
+// depend on how the index was built.
+func (s *Store) QueryExact(ctx context.Context, embedding []float32, topK int) ([]vector.Result, error) {
+	if topK <= 0 {
+		return nil, nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_indexscan = off"); err != nil {
+		return nil, err
+	}
+	return topByCosine(ctx, tx, embedding, topK)
+}
+
+// querier is what a pool and a transaction have in common.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func topByCosine(ctx context.Context, q querier, embedding []float32, topK int) ([]vector.Result, error) {
+	rows, err := q.Query(ctx, `
 		SELECT id, content, metadata, embedding <=> $1 AS distance
 		FROM documents
 		ORDER BY embedding <=> $1
