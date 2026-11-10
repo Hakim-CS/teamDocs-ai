@@ -2,8 +2,12 @@ package pgvector
 
 import (
 	"context"
+	"fmt"
 	"godocs-rag/vector"
+	"math"
 	"os"
+	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -107,5 +111,64 @@ func TestSchemeErrRejectsMixedIndex(t *testing.T) {
 		if err := schemeErr(tc.counts, "a"); (err == nil) != tc.ok {
 			t.Errorf("schemeErr(%v, a) = %v, want ok=%v", tc.counts, err, tc.ok)
 		}
+	}
+}
+
+// QueryExact is the eval's ground truth, so it must return the true nearest
+// neighbours in order. The oracle is cosine similarity computed here: chunk i
+// points (1, 0.1i, 0, ...), so a smaller i is closer to the query (1, 0, ...)
+// and every corpus row in a shared database is far behind them.
+func TestQueryExactReturnsTrueNearestNeighbours(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	const src = "__test_exact__.txt"
+	t.Cleanup(func() { s.ReplaceSource(ctx, src, nil) })
+
+	var docs []vector.Document
+	for i := 12; i >= 1; i-- { // inserted far-to-near, so insertion order is no help
+		d := doc(fmt.Sprintf("%s#%d", src, i), src, testDim)
+		d.Embedding = make([]float32, testDim)
+		d.Embedding[0], d.Embedding[1] = 1, float32(i)/10
+		docs = append(docs, d)
+	}
+	if err := s.ReplaceSource(ctx, src, docs); err != nil {
+		t.Fatal(err)
+	}
+	query := make([]float32, testDim)
+	query[0] = 1
+
+	got, err := s.QueryExact(ctx, query, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantIDs, gotIDs []string
+	for i := 1; i <= 5; i++ {
+		wantIDs = append(wantIDs, fmt.Sprintf("%s#%d", src, i))
+	}
+	for _, r := range got {
+		gotIDs = append(gotIDs, r.ID)
+	}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("got %v, want %v", gotIDs, wantIDs)
+	}
+	for i, r := range got {
+		want := 1 / math.Sqrt(1+math.Pow(float64(i+1)/10, 2))
+		if math.Abs(float64(r.Score)-want) > 1e-4 {
+			t.Errorf("%s: score %v, want cosine %v", r.ID, r.Score, want)
+		}
+	}
+}
+
+// pgvector's default hnsw.ef_search of 40 let HNSW miss the true nearest
+// neighbour for some questions (see README), so every connection in the
+// pool must search wider.
+func TestConnectionsSearchWiderThanPgvectorDefault(t *testing.T) {
+	s := openTest(t)
+	var got string
+	if err := s.pool.QueryRow(context.Background(), `SHOW hnsw.ef_search`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := strconv.Itoa(efSearch); got != want {
+		t.Fatalf("hnsw.ef_search = %s, want %s", got, want)
 	}
 }

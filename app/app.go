@@ -26,6 +26,7 @@ func Run(parent context.Context, cfg config.Config) error {
 	logger := log.New(os.Stderr, "[rag] ", log.LstdFlags)
 
 	ctx, cancel := context.WithCancel(parent)
+	// close the database and finish the thread
 	defer cancel()
 
 	client := llm.New(cfg)

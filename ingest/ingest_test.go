@@ -25,6 +25,18 @@ func (s *recordingStore) Query(context.Context, []float32, int) ([]vector.Result
 }
 func (s *recordingStore) Close() error { return nil }
 
+// go doc output is split per declaration, not into byte windows.
+func TestIndexSplitsGoDocOnDeclarations(t *testing.T) {
+	store := &recordingStore{}
+	n, err := ProcessContent(context.Background(), "demo.txt", []byte(sampleGoDoc), Options{}, fakeEmbedder{"m"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 || len(store.docs) != 5 {
+		t.Fatalf("stored %d chunks (returned %d), want 5: overview, A, B, T, M", len(store.docs), n)
+	}
+}
+
 // Every chunk records how it was embedded, so a mixed index is detectable.
 func TestIndexRecordsEmbedScheme(t *testing.T) {
 	store := &recordingStore{}

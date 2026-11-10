@@ -1,6 +1,6 @@
 // Package rag is the query side: rewrite a follow-up into a standalone
-// query, embed it, fetch the nearest chunks, drop weak matches, and
-// format the survivors as prompt context.
+// query, embed it, fetch the nearest chunks, refuse the question when
+// even the best one is weak, and format the hits as prompt context.
 package rag
 
 import (
@@ -8,16 +8,18 @@ import (
 	"fmt"
 	"godocs-rag/llm"
 	"godocs-rag/vector"
+	"slices"
 )
 
 const defaultTopK = 5
 
 type Options struct {
 	TopK int
-	// MinScore drops hits whose cosine similarity is below it. When
-	// every hit is dropped the model gets no excerpts and the system
-	// prompt tells it to say the docs don't cover the question. The
-	// value is chosen from the eval (see cmd/eval); 0 disables it.
+	// MinScore is the out-of-scope gate: when no hit's cosine similarity
+	// reaches it, Search returns nothing, the model gets no excerpts and
+	// the system prompt tells it to say the docs don't cover the question.
+	// Otherwise every hit is returned. The value is chosen from the eval
+	// (see cmd/eval); 0 disables it.
 	MinScore float64
 	Rewriter *Rewriter
 }
@@ -64,7 +66,7 @@ func (r *Retriever) Retrieve(ctx context.Context, history []llm.Message) (string
 }
 
 // Search returns the chunks relevant to the latest user turn, best
-// first, with weak matches (below MinScore) removed.
+// first, or nothing when even the best one is below MinScore.
 func (r *Retriever) Search(ctx context.Context, history []llm.Message) ([]SearchResult, error) {
 	query := r.buildQuery(ctx, history)
 	if query == "" {
@@ -81,11 +83,15 @@ func (r *Retriever) Search(ctx context.Context, history []llm.Message) ([]Search
 		return nil, fmt.Errorf("vector query: %w", err)
 	}
 
+	// The floor gates the question, not each hit: weak hits that sit next
+	// to a strong one stay in the context (a keyword-only match from hybrid
+	// search scores low on cosine but is still wanted).
+	if !slices.ContainsFunc(hits, func(h vector.Result) bool { return float64(h.Score) >= r.minScore }) {
+		return nil, nil
+	}
+
 	var results []SearchResult
 	for _, h := range hits {
-		if float64(h.Score) < r.minScore {
-			continue
-		}
 		res := SearchResult{
 			ChunkID: h.ID,
 			Source:  h.Metadata["source"],
