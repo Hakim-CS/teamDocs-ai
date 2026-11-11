@@ -27,7 +27,7 @@ The full eval ingest takes about 3 minutes on local Ollama. Use `-skip-ingest` w
 
 ## Eval rules (the core of the project)
 
-- `eval/golden.jsonl`: `{"q", "source", "contains"}`. A hit is a chunk from `source` that contains `contains` (case-insensitive). No source means out of scope, which passes when nothing is retrieved. Labels are validated against `corpus/` at startup.
+- `eval/golden.jsonl`: `{"q", "source", "contains", "kind"?}` (`"kind": "identifier"` or `"opaque"` tags a slice reported on its own). A hit is a chunk from `source` that contains `contains` (case-insensitive). No source means out of scope, which passes when nothing is retrieved. Labels are validated against `corpus/` at startup.
 - Write questions the way a developer would ask them. Don't copy doc wording, or the set becomes trivially easy.
 - `eval/baseline.json` is the CI gate (tolerance 0.02). Re-baseline only for a deliberate change (new model, k, min_score, cases, or an improvement) and state the before/after numbers in the commit message.
 - `config.DefaultMinScore` (0.55) was chosen with `-split dev -sweep` (highest floor losing no dev in-scope hit) and reported on `-split test`. If retrieval changes, re-sweep and update both the constant and the baseline.

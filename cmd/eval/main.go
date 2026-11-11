@@ -44,7 +44,19 @@ type Case struct {
 	// passage includes. Labelling by phrase rather than chunk ID keeps
 	// the set valid when chunking changes.
 	Contains string `json:"contains"`
+	// Kind optionally tags a slice of the set to report on its own, where
+	// keyword search should help and embeddings may not: "identifier"
+	// questions name an API whose doc describes what it does, "opaque" ones
+	// name a variable, constant or error whose name says little.
+	Kind string `json:"kind,omitempty"`
 }
+
+const (
+	kindIdentifier = "identifier"
+	kindOpaque     = "opaque"
+)
+
+var kinds = []string{kindIdentifier, kindOpaque}
 
 // Metrics are all higher-is-better fractions in [0, 1].
 type Metrics struct {
@@ -91,7 +103,7 @@ func main() {
 	flag.StringVar(&o.split, "split", "", `evaluate one half of the questions: "dev" (for tuning) or "test" (for reporting)`)
 	flag.IntVar(&o.k, "k", 5, "chunks retrieved per question")
 	flag.Float64Var(&o.minScore, "min-score", -1, "similarity floor (default: RETRIEVAL_MIN_SCORE / app default)")
-	flag.Float64Var(&o.tolerance, "tolerance", 0.02, "allowed drop per metric before failing")
+	flag.Float64Var(&o.tolerance, "tolerance", 0.02, "allowed drop per metric before failing (never less than 2 questions' worth)")
 	flag.BoolVar(&o.writeBaseline, "write-baseline", false, "write current metrics to -baseline instead of gating")
 	flag.BoolVar(&o.skipIngest, "skip-ingest", false, "reuse the already-indexed corpus")
 	flag.BoolVar(&o.sweep, "sweep", false, "print recall and abstention across MinScore values, then exit")
@@ -204,14 +216,20 @@ func run(o options) error {
 		fmt.Printf("\nBaseline written to %s\n", o.baseline)
 		return nil
 	}
-	return gate(cur, o.baseline, o.tolerance)
+	neg := 0
+	for _, c := range cases {
+		if c.Source == "" {
+			neg++
+		}
+	}
+	return gate(cur, o.baseline, o.tolerance, len(cases)-neg, neg)
 }
 
 // caseResults pairs each case's filtered outcome with its best unfiltered score.
 func caseResults(cases []Case, outs []outcome, scores [][]float64) []CaseResult {
 	rs := make([]CaseResult, len(cases))
 	for i, c := range cases {
-		rs[i] = CaseResult{Question: c.Question, Source: c.Source, Rank: outs[i].rank, Hits: outs[i].hits}
+		rs[i] = CaseResult{Question: c.Question, Source: c.Source, Kind: c.Kind, Rank: outs[i].rank, Hits: outs[i].hits}
 		if len(scores[i]) > 0 {
 			rs[i].BestScore = slices.Max(scores[i])
 		}
@@ -239,6 +257,9 @@ func loadCases(path string) ([]Case, error) {
 		}
 		if c.Question == "" || (c.Source == "") != (c.Contains == "") {
 			return nil, fmt.Errorf("%s:%d: need q, and source+contains together", path, line)
+		}
+		if c.Kind != "" && (!slices.Contains(kinds, c.Kind) || c.Source == "") {
+			return nil, fmt.Errorf("%s:%d: kind must be one of %q and needs a source", path, line, kinds)
 		}
 		cases = append(cases, c)
 	}
@@ -362,6 +383,18 @@ func score(cases []Case, outs []outcome) Metrics {
 	return m
 }
 
+// slice scores only the cases of one kind and returns how many there are.
+func slice(cases []Case, outs []outcome, kind string) (int, Metrics) {
+	var cs []Case
+	var sub []outcome
+	for i, c := range cases {
+		if c.Kind == kind {
+			cs, sub = append(cs, c), append(sub, outs[i])
+		}
+	}
+	return len(cs), score(cs, sub)
+}
+
 func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64, indexAgree int) {
 	lat := make([]time.Duration, len(outs))
 	for i, o := range outs {
@@ -394,6 +427,11 @@ func printReport(b Baseline, cases []Case, outs []outcome, separationAUC float64
 	fmt.Printf("| Metric | Value |\n|---|---:|\n")
 	fmt.Printf("| Recall@1 | %.3f |\n| Recall@%d | %.3f |\n| MRR@%d | %.3f |\n", b.RecallAt1, b.K, b.RecallAtK, b.K, b.MRR)
 	fmt.Printf("| Abstention (out-of-scope) | %.3f |\n", b.Abstention)
+	for _, kind := range kinds {
+		if n, m := slice(cases, outs, kind); n > 0 {
+			fmt.Printf("| %s questions (%d): Recall@1 / Recall@%d / MRR | %.3f / %.3f / %.3f |\n", kind, n, b.K, m.RecallAt1, m.RecallAtK, m.MRR)
+		}
+	}
 	fmt.Printf("| Misses (right file / wrong file) | %d / %d |\n", rightFile, wrongFile)
 	fmt.Printf("| Separation AUC (best score, in- vs out-of-scope) | %.3f |\n", separationAUC)
 	fmt.Printf("| Index matches exact search (top-%d scores) | %d / %d |\n", b.K, indexAgree, len(cases))
@@ -462,8 +500,16 @@ func printSweep(cases []Case, outs []outcome, scores [][]float64) {
 	}
 }
 
-// gate fails when any metric drops more than tolerance below baseline.
-func gate(cur Baseline, path string, tolerance float64) error {
+// slackQuestions is how many questions a metric may lose before the gate
+// fails. A fraction over few questions moves in big steps (one out-of-scope
+// question is 1/30), and 7 of 30 sit within 0.01 of the floor, so a slightly
+// different embedding build flips a few without any regression.
+const slackQuestions = 2
+
+// gate fails when a metric drops below baseline by more than the larger of
+// tolerance and slackQuestions questions. pos and neg are the in-scope and
+// out-of-scope question counts that the metrics are fractions of.
+func gate(cur Baseline, path string, tolerance float64, pos, neg int) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read baseline (create one with -write-baseline): %w", err)
@@ -478,15 +524,19 @@ func gate(cur Baseline, path string, tolerance float64) error {
 	}
 
 	var failed []string
-	check := func(name string, got, want float64) {
-		if got < want-tolerance {
-			failed = append(failed, fmt.Sprintf("%s %.3f < baseline %.3f - %.2f", name, got, want, tolerance))
+	check := func(name string, got, want float64, n int) {
+		allowed := tolerance
+		if n > 0 {
+			allowed = max(allowed, slackQuestions/float64(n))
+		}
+		if got < want-allowed-1e-9 {
+			failed = append(failed, fmt.Sprintf("%s %.3f < baseline %.3f - %.3f", name, got, want, allowed))
 		}
 	}
-	check("recall@1", cur.RecallAt1, base.RecallAt1)
-	check("recall@k", cur.RecallAtK, base.RecallAtK)
-	check("mrr", cur.MRR, base.MRR)
-	check("abstention", cur.Abstention, base.Abstention)
+	check("recall@1", cur.RecallAt1, base.RecallAt1, pos)
+	check("recall@k", cur.RecallAtK, base.RecallAtK, pos)
+	check("mrr", cur.MRR, base.MRR, pos)
+	check("abstention", cur.Abstention, base.Abstention, neg)
 	if len(failed) > 0 {
 		return fmt.Errorf("regression:\n  %s", strings.Join(failed, "\n  "))
 	}

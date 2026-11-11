@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"godocs-rag/rag"
 	"godocs-rag/vector"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -37,6 +40,81 @@ func TestJudgeAndScore(t *testing.T) {
 		if math.Abs(pair[0]-pair[1]) > 1e-9 {
 			t.Errorf("%s = %v, want %v", name, pair[0], pair[1])
 		}
+	}
+}
+
+func writeBaselineFile(t *testing.T, b Baseline) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	data, _ := json.Marshal(b)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// One out-of-scope question moves abstention by 1/30, more than the flat
+// tolerance, so a different Ollama build could fail CI with no regression.
+// The gate lets every metric drop by slackQuestions questions, and no more.
+func TestGateToleratesQuestionNoise(t *testing.T) {
+	base := Baseline{Metrics: Metrics{RecallAt1: 0.4, RecallAtK: 0.7, MRR: 0.5, Abstention: 0.5}, K: 5, Cases: 147}
+	path := writeBaselineFile(t, base)
+	const pos, neg = 117, 30
+
+	cur := func(m Metrics) Baseline { b := base; b.Metrics = m; return b }
+	abstain := func(refused int) Metrics { m := base.Metrics; m.Abstention = float64(refused) / neg; return m }
+
+	if err := gate(cur(abstain(15-slackQuestions)), path, 0.02, pos, neg); err != nil {
+		t.Errorf("losing %d out-of-scope questions should pass: %v", slackQuestions, err)
+	}
+	if err := gate(cur(abstain(15-slackQuestions-1)), path, 0.02, pos, neg); err == nil {
+		t.Errorf("losing %d out-of-scope questions should fail", slackQuestions+1)
+	}
+	// Recall: one question is under the tolerance, so the flat 0.02 still rules.
+	m := base.Metrics
+	m.RecallAtK -= 0.03
+	if err := gate(cur(m), path, 0.02, pos, neg); err == nil {
+		t.Error("a 0.03 recall drop should fail")
+	}
+}
+
+// A slice is scored on its own questions only, so a keyword-style change can
+// be judged where it should help without the rest of the set diluting it.
+func TestSliceScoresOnlyItsKind(t *testing.T) {
+	cases := []Case{
+		{Question: "a", Source: "x.txt", Contains: "x", Kind: kindIdentifier},
+		{Question: "b", Source: "x.txt", Contains: "x"},
+		{Question: "c", Source: "x.txt", Contains: "x", Kind: kindIdentifier},
+	}
+	outs := []outcome{{rank: 1}, {rank: 0}, {rank: 0}}
+	n, m := slice(cases, outs, kindIdentifier)
+	if n != 2 || m.RecallAt1 != 0.5 || m.RecallAtK != 0.5 || m.MRR != 0.5 {
+		t.Errorf("slice = %d %+v, want 2 questions at 0.5", n, m)
+	}
+	if n, _ := slice(cases, outs, "nothing"); n != 0 {
+		t.Errorf("unknown kind matched %d questions", n)
+	}
+}
+
+func TestLoadCasesKindNeedsASource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "g.jsonl")
+	write := func(s string) { os.WriteFile(path, []byte(s+"\n"), 0o644) }
+
+	write(`{"q":"a","source":"x.txt","contains":"x","kind":"identifier"}`)
+	if cs, err := loadCases(path); err != nil || cs[0].Kind != kindIdentifier {
+		t.Fatalf("valid identifier case: %v %+v", err, cs)
+	}
+	write(`{"q":"a","source":"x.txt","contains":"x","kind":"opaque"}`)
+	if cs, err := loadCases(path); err != nil || cs[0].Kind != kindOpaque {
+		t.Fatalf("valid opaque case: %v %+v", err, cs)
+	}
+	write(`{"q":"a","kind":"identifier"}`)
+	if _, err := loadCases(path); err == nil {
+		t.Error("an out-of-scope question cannot be an identifier question")
+	}
+	write(`{"q":"a","source":"x.txt","contains":"x","kind":"typo"}`)
+	if _, err := loadCases(path); err == nil {
+		t.Error("an unknown kind should be rejected, so a typo cannot hide a case")
 	}
 }
 

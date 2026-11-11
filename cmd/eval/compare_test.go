@@ -81,6 +81,18 @@ func TestCompareListsFlips(t *testing.T) {
 
 // An out-of-scope question is abstained when the floor left it no hits.
 // Its flips are paired like recall flips; in-scope questions never count.
+func TestOnlyKeepsOneKind(t *testing.T) {
+	r := Results{Cases: []CaseResult{
+		{Question: "a", Source: "x.txt", Kind: kindIdentifier},
+		{Question: "b", Source: "x.txt"},
+		{Question: "c"},
+	}}
+	got := only(r, kindIdentifier)
+	if len(got.Cases) != 1 || got.Cases[0].Question != "a" {
+		t.Errorf("only = %+v, want just question a", got.Cases)
+	}
+}
+
 func TestCompareListsAbstentionFlips(t *testing.T) {
 	a := Results{Cases: []CaseResult{
 		{Question: "refused 1", Hits: 3},

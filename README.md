@@ -6,22 +6,28 @@ Generic chatbots confidently invent Go APIs. This project answers from the actua
 
 ## Current results
 
-Measured by `go run ./cmd/eval` over 117 in-scope and 30 out-of-scope questions (`eval/golden.jsonl`), 25 stdlib packages / 1,923 chunks, `nomic-embed-text`, k=5:
+Measured by `go run ./cmd/eval` over 202 in-scope and 30 out-of-scope questions (`eval/golden.jsonl`), 25 stdlib packages / 1,923 chunks, `nomic-embed-text`, k=5:
+
+| Metric | All questions | Original 117 in-scope | Identifier (50) | Opaque identifier (35) |
+| --- | ---: | ---: | ---: | ---: |
+| Recall@1 | 0.584 | 0.402 | 0.900 | 0.743 |
+| Recall@5 | 0.822 | 0.709 | 1.000 | 0.943 |
+| MRR@5 | 0.680 | 0.524 | 0.950 | 0.815 |
 
 | Metric | Value |
 | --- | ---: |
-| Recall@1 | 0.402 |
-| Recall@5 | 0.709 |
-| MRR@5 | 0.524 |
 | Out-of-scope abstention | 0.500 |
-| Misses: right file / wrong file | 29 / 5 |
-| Separation AUC (best score, in- vs out-of-scope) | 0.972 |
-| Index matches exact search (top-5 scores) | 147 / 147 |
-| Query latency p50 / p95 (embed + search, local Ollama) | 35 ms / 41 ms |
+| Misses: right file / wrong file | 31 / 5 |
+| Separation AUC (best score, in- vs out-of-scope) | 0.984 |
+| Index matches exact search (top-5 scores) | 232 / 232 |
+| Query latency p50 / p95 (embed + search, local Ollama) | 42 ms / 51 ms |
+
+**The jump from 0.709 to 0.822 is not an improvement.** It comes from adding 85 identifier-style questions that vector search handles well; the original 117 give exactly the old numbers (the second column). The baseline was re-written for the larger set, so older numbers in this README (0.709, 147 questions) refer to the original set.
 
 These are honest numbers for dense vector search over declaration-aware chunks, not a finished system. The eval shows *where* it still fails:
 
-- **Mostly ranking.** 29 of the 34 misses retrieve the right file but rank the wrong passage higher. The other 5 retrieve a different file altogether (it was 1 before the chunking change, see below).
+- **Mostly ranking.** 31 of the 36 misses retrieve the right file but rank the wrong passage higher. The other 5 retrieve a different file altogether (it was 1 before the chunking change, see below).
+- **Identifier questions are nearly solved, but not at rank 1.** Dense search finds all 50 named-API questions in the top 5 and 33 of 35 opaque ones (`sql.ErrNoRows`, `slog.LevelWarn`), because every chunk starts with the declaration and the question repeats its name. The room left is ranking: Recall@1 is 0.900 and 0.743. That is the only place a keyword leg could still help, and it can show up in MRR and Recall@1, not Recall@5.
 - **Near-domain questions.** Only 4 of the 18 questions about libraries and tools these packages don't document (errgroup, YAML, bcrypt, pprof) are refused; they score as close to the docs as real questions do.
 
 That is what the next retrieval changes target (see [Roadmap](#roadmap)), and the gate makes each one prove itself.
@@ -123,7 +129,7 @@ Vector search can miss exact identifiers, so Postgres full-text search (a genera
 - **AND is the only arm above vector-only, and it is not proven.** 6 questions gained, 1 lost, but p = 0.125 and the MRR interval includes zero; recall@1 is slightly lower. The gain sits in the test half (+5 −0, p = 0.0625); the dev half it was picked on shows +1 −1. Not shipped.
 - **The control behaves.** The same AND query with another question's words gives no gain (+1 −3), so a gain needs relevant words. The OR form with another question's words drops recall@5 to 0.462.
 - **Task 4's gate matters once keyword hits exist.** With the AND variant, a per-hit floor deletes hits the per-query rule keeps: +2 recall@5 at 0.55 (p = 0.50) and +4 at 0.575 (p = 0.125). Directional only.
-- **The eval cannot settle it.** 117 in-scope questions cannot show +6 −1 at p < 0.05, and the golden set has almost no identifier-style questions, which are what hybrid targets. A second attempt needs that slice first. The variants were throwaway `go build -overlay` builds; the implementation is not in this repo.
+- **The eval cannot settle it.** 117 in-scope questions cannot show +6 −1 at p < 0.05, and the golden set had almost no identifier-style questions, which are what hybrid targets. Those slices have since been added (see The eval). Vector-only already finds nearly all of them in the top 5, so a second attempt has to show its gain in ranking (Recall@1 and MRR). The variants were throwaway `go build -overlay` builds; the implementation is not in this repo.
 
 ## How it works
 
@@ -144,7 +150,8 @@ Vector search can miss exact identifiers, so Postgres full-text search (a genera
 - A retrieved chunk is **relevant** when it comes from the labelled source file *and* contains the labelled phrase. Labelling by phrase instead of chunk ID keeps the set valid when chunking changes, and every label is checked against the corpus at startup, so a typo can't silently become a guaranteed miss.
 - Out-of-scope questions have no source; they pass when retrieval returns nothing. Most of them are near-domain: Go questions about libraries and tools these 25 packages don't document, which are much harder to refuse than unrelated questions.
 - The report splits misses into *right file* (a ranking problem) and *wrong file* (a coverage problem), so each change can target the one that dominates.
-- CI fails if recall@1, recall@k, MRR or abstention falls more than 0.02 below `eval/baseline.json`. Improvements are accepted by re-running with `-write-baseline` and committing the new file.
+- **Identifier slices.** 85 questions carry a `kind` and are reported on their own row; `-compare` adds a paired McNemar and MRR interval per kind. `"identifier"` (50) names an API whose doc says what it does (`time.ParseDuration`, `sync.Map CompareAndSwap`, `strings.CutPrefix`); `"opaque"` (35) names an error, constant or terse function (`sql.ErrNoRows`, `http.StatusTeapot`, `slog.LevelWarn`). They are written the way a developer types a name, not copied from the doc wording. Names that exist in several packages (`strings.EqualFold`, `bytes.EqualFold`) spell out the package, so each label has one right file. The first slice was built to test hybrid search, and it was saturated (Recall@5 1.000), so the opaque one was added; both are in the normal run, not separate gates.
+- CI fails if recall@1, recall@k, MRR or abstention falls below `eval/baseline.json` by more than the larger of 0.02 and two questions. Two questions is 0.067 of abstention (30 questions) but under 0.02 of recall (117+), so only abstention gets the wider margin. Improvements are accepted by re-running with `-write-baseline` and committing the new file.
 
 `corpus/` is generated from the Go toolchain's own docs (`go run ./cmd/corpus`, which calls `go doc -all`) and committed, so the eval is reproducible offline.
 
@@ -236,7 +243,7 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 - **The client owns the conversation history.** The server rejects client-sent `system` messages, but a client can still forge `assistant` turns. Server-side sessions would close this.
 - **Uploads are unauthenticated**, and uploaded documents are retrieved into the prompt, so a malicious document can attempt indirect prompt injection. The regex filter in `web/injection.go` is a tripwire, not a security boundary. Bind to `127.0.0.1` (the default).
 - Abstention is measured on 30 out-of-scope questions. In-scope and near-domain questions score too close together to separate cleanly: on an accurate index, moving the floor from 0.55 to 0.575 refuses 7 more of them (15 → 22 of 30) and loses 2 in-scope hits (recall@5 0.709 → 0.692).
-- **The abstention gate is coarse.** One out-of-scope question is worth 0.033 of abstention, more than the 0.02 gate tolerance, and 7 of the 30 score within 0.01 of the 0.55 floor (0.543 to 0.558). A small difference in embeddings (another Ollama build, a CPU instead of a GPU) can move several of them at once, so the abstention check can fail without any regression. A tolerance of at least two questions would fix that; it is not done.
+- **The abstention gate has a wider margin, not a sharper one.** One out-of-scope question is worth 0.033 of abstention, and 7 of the 30 score within 0.01 of the 0.55 floor (0.543 to 0.558), so a small difference in embeddings (another Ollama build, a CPU instead of a GPU) can move several at once. The gate now allows two questions (0.067) instead of a flat 0.02, which absorbs that noise, but it also means a real loss of one or two refusals passes. A gate on the separation AUC, which does not depend on the floor, would be sharper; it is not done.
 - Only `go doc` text is split on declarations. Other documents (uploads, notes) still use byte windows, and the overlap start isn't snapped to a word boundary.
 - Declaration chunks are small (median 297 bytes, was 905), so each excerpt gives the model less surrounding context. The eval scores retrieval, not answers, and an answer-level eval is still missing.
 - Conversation history is in memory only.
@@ -245,8 +252,8 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 
 Each step is judged by the eval, not by intuition:
 
-1. **A sturdier abstention gate, then the floor:** a tolerance of at least two questions (or a gate on the separation AUC, which does not depend on the floor), then decide the floor (see Relevance floor).
-2. **Hybrid retrieval, second attempt:** first add an identifier-style slice to the golden set, then retry the full-text AND variant with a weight on the keyword list (see the experiment above).
+1. **Decide the floor** (see Relevance floor). The gate now tolerates two questions of abstention noise; a gate on the separation AUC would be sharper.
+2. **Hybrid retrieval, second attempt:** the identifier slices now exist (50 + 35 questions) and vector-only is already strong on them (Recall@5 1.000 and 0.943), so the test can only be about ranking: Recall@1 0.900 and 0.743, MRR 0.950 and 0.815. Next: retry the full-text AND variant with a weight on the keyword list under a ship rule fixed in advance, judged on those slices and on the original 117, so a gain on identifiers cannot hide a loss elsewhere (see the experiment above).
 3. **Experiments:** other embedding models, and an LLM rerank of the top 20. Each ships only if `-compare` shows a significant gain.
 4. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
 5. **Server-side sessions, upload auth, rate limiting.**

@@ -145,3 +145,88 @@
 {"q":"What should a multi-stage Dockerfile for a Go service look like?"}
 {"q":"How do I make my server restart automatically when I change the code?"}
 {"q":"How do I check my tests for data races?"}
+{"q":"Which units does time.ParseDuration understand?","source":"time.txt","contains":"ParseDuration parses a duration string","kind":"identifier"}
+{"q":"What does Time.Truncate do if I pass a zero or negative duration?","source":"time.txt","contains":"If d <= 0, Truncate returns t stripped","kind":"identifier"}
+{"q":"Is strconv.Atoi just ParseInt with fixed arguments?","source":"strconv.txt","contains":"Atoi is equivalent to ParseInt(s, 10, 0)","kind":"identifier"}
+{"q":"Which spellings does strconv.ParseBool accept besides true and false?","source":"strconv.txt","contains":"ParseBool returns the boolean value represented by the string","kind":"identifier"}
+{"q":"How does filepath.WalkDir treat the errors passed to my callback?","source":"path_filepath.txt","contains":"WalkDir walks the file tree rooted at root","kind":"identifier"}
+{"q":"What does filepath.Rel give me for two paths?","source":"path_filepath.txt","contains":"Rel returns a relative path that is lexically equivalent","kind":"identifier"}
+{"q":"What must be true of the old value passed to sync.Map CompareAndSwap?","source":"sync.txt","contains":"CompareAndSwap swaps the old and new values for key","kind":"identifier"}
+{"q":"How do I read the reason back after context.WithCancelCause is cancelled?","source":"context.txt","contains":"WithCancelCause behaves like WithCancel","kind":"identifier"}
+{"q":"What happens if the context is already done when I call context.AfterFunc?","source":"context.txt","contains":"AfterFunc arranges to call f in its own goroutine","kind":"identifier"}
+{"q":"What is strings.Builder.Grow for, and what if n is negative?","source":"strings.txt","contains":"Grow grows b's capacity","kind":"identifier"}
+{"q":"What are the prefix and indent arguments of json.MarshalIndent?","source":"encoding_json.txt","contains":"MarshalIndent is like Marshal but applies Indent","kind":"identifier"}
+{"q":"How do I make a json.Decoder reject keys that are not in my struct, DisallowUnknownFields?","source":"encoding_json.txt","contains":"DisallowUnknownFields causes the Decoder to return an error","kind":"identifier"}
+{"q":"What does io.TeeReader do when the write fails?","source":"io.txt","contains":"TeeReader returns a Reader that writes to w","kind":"identifier"}
+{"q":"Does io.Pipe buffer anything?","source":"io.txt","contains":"Pipe creates a synchronous in-memory pipe","kind":"identifier"}
+{"q":"How does io.LimitReader behave once it has read n bytes?","source":"io.txt","contains":"LimitReader returns a Reader that reads from r but stops with EOF","kind":"identifier"}
+{"q":"When should I use regexp.QuoteMeta?","source":"regexp.txt","contains":"QuoteMeta returns a string that escapes all regular expression","kind":"identifier"}
+{"q":"slices.SortStableFunc or SortFunc if I need equal items to keep their order?","source":"slices.txt","contains":"SortStableFunc sorts the slice x while keeping the original order","kind":"identifier"}
+{"q":"What does errors.Join return when every error is nil?","source":"errors.txt","contains":"Join returns an error that wraps the given errors","kind":"identifier"}
+{"q":"Does os.MkdirAll return an error when the directory is already there?","source":"os.txt","contains":"MkdirAll creates a directory named path","kind":"identifier"}
+{"q":"When do I need os.LookupEnv instead of os.Getenv?","source":"os.txt","contains":"LookupEnv retrieves the value of the environment variable","kind":"identifier"}
+{"q":"How does exec.LookPath search when the name contains a slash?","source":"os_exec.txt","contains":"LookPath searches for an executable named file","kind":"identifier"}
+{"q":"What does exec.CommandContext do to the process when ctx is cancelled?","source":"os_exec.txt","contains":"CommandContext is like Command but includes a context","kind":"identifier"}
+{"q":"How is http.MaxBytesReader different from io.LimitReader?","source":"net_http.txt","contains":"MaxBytesReader is similar to io.LimitReader","kind":"identifier"}
+{"q":"What does http.StripPrefix answer for a path that lacks the prefix?","source":"net_http.txt","contains":"StripPrefix returns a handler that serves HTTP requests by removing","kind":"identifier"}
+{"q":"How do I get allocation numbers for just one benchmark with b.ReportAllocs?","source":"testing.txt","contains":"ReportAllocs enables malloc statistics","kind":"identifier"}
+{"q":"In which order does t.Cleanup run the functions I registered?","source":"testing.txt","contains":"Cleanup registers a function to be called when the test","kind":"identifier"}
+{"q":"Can I call t.Setenv in a test that uses t.Parallel?","source":"testing.txt","contains":"Setenv calls os.Setenv(key, value) and uses Cleanup","kind":"identifier"}
+{"q":"What does time.NewTicker do if the receiver is slow?","source":"time.txt","contains":"NewTicker returns a new Ticker containing a channel","kind":"identifier"}
+{"q":"What does atomic.Value.Swap return when nothing was stored yet?","source":"sync_atomic.txt","contains":"Swap stores new into Value and returns the previous value","kind":"identifier"}
+{"q":"What happens when the function given to sync.OnceFunc panics?","source":"sync.txt","contains":"OnceFunc returns a function that invokes f only once","kind":"identifier"}
+{"q":"Do I need to hold c.L when I call sync.Cond Broadcast?","source":"sync.txt","contains":"Broadcast wakes all goroutines waiting on c","kind":"identifier"}
+{"q":"In what order does strings.NewReplacer apply overlapping pairs?","source":"strings.txt","contains":"NewReplacer returns a new Replacer from a list of old, new string pairs","kind":"identifier"}
+{"q":"Are the bytes from bufio.Reader.Peek still valid after the next Read?","source":"bufio.txt","contains":"Peek returns the next n bytes without advancing the reader","kind":"identifier"}
+{"q":"How do I allow longer lines with bufio.Scanner.Buffer?","source":"bufio.txt","contains":"Buffer controls memory allocation by the Scanner","kind":"identifier"}
+{"q":"What does DB.SetMaxOpenConns do to the idle connection limit?","source":"database_sql.txt","contains":"SetMaxOpenConns sets the maximum number of open connections","kind":"identifier"}
+{"q":"What does fmt.Sscanf return and how does it treat newlines?","source":"fmt.txt","contains":"Sscanf scans the argument string","kind":"identifier"}
+{"q":"Does maps.Keys give me a slice or something else?","source":"maps.txt","contains":"Keys returns an iterator over keys in m","kind":"identifier"}
+{"q":"What does slices.BinarySearch return if the target is not in the slice?","source":"slices.txt","contains":"BinarySearch searches for target in a sorted slice","kind":"identifier"}
+{"q":"How do I use strings.CutPrefix to strip a prefix and know it was there?","source":"strings.txt","contains":"CutPrefix returns s without the provided leading prefix string","kind":"identifier"}
+{"q":"What does slog.SetDefault change for the old log package?","source":"log_slog.txt","contains":"SetDefault makes l the default Logger","kind":"identifier"}
+{"q":"Is strings.EqualFold the same as comparing lower-cased strings?","source":"strings.txt","contains":"EqualFold reports whether s and t, interpreted as UTF-8 strings","kind":"identifier"}
+{"q":"Which bases does strconv.FormatInt support?","source":"strconv.txt","contains":"FormatInt returns the string representation of i in the given base","kind":"identifier"}
+{"q":"Does os.ReadFile ever return io.EOF?","source":"os.txt","contains":"ReadFile reads the named file and returns the contents","kind":"identifier"}
+{"q":"Do I still have to call the cancel function from context.WithTimeout?","source":"context.txt","contains":"WithTimeout returns WithDeadline","kind":"identifier"}
+{"q":"Can fmt.Errorf wrap an error, and with which verb?","source":"fmt.txt","contains":"Errorf formats according to a format specifier","kind":"identifier"}
+{"q":"When must flag.Parse be called relative to defining flags?","source":"flag.txt","contains":"Parse parses the command-line flags from os.Args[1:]","kind":"identifier"}
+{"q":"How does Time.Round treat a value exactly halfway between multiples?","source":"time.txt","contains":"The rounding behavior for halfway values is to round up","kind":"identifier"}
+{"q":"What is the difference between sort.Slice and sort.SliceStable?","source":"sort.txt","contains":"SliceStable sorts the slice x using the provided less function","kind":"identifier"}
+{"q":"What does regexp.MustCompile do on a bad pattern?","source":"regexp.txt","contains":"MustCompile is like Compile but panics","kind":"identifier"}
+{"q":"What is json.RawMessage used for?","source":"encoding_json.txt","contains":"RawMessage is a raw encoded JSON value","kind":"identifier"}
+{"q":"What does sql.ErrNoRows mean and when do I get it?","source":"database_sql.txt","contains":"errors.New(\"sql: no rows in result set\")","kind":"opaque"}
+{"q":"What is sql.ErrTxDone telling me?","source":"database_sql.txt","contains":"errors.New(\"sql: transaction has already been committed or rolled back\")","kind":"opaque"}
+{"q":"What is http.ErrAbortHandler for?","source":"net_http.txt","contains":"errors.New(\"net/http: abort Handler\")","kind":"opaque"}
+{"q":"Why does ListenAndServe return http.ErrServerClosed after a shutdown?","source":"net_http.txt","contains":"errors.New(\"http: Server closed\")","kind":"opaque"}
+{"q":"What status code is http.StatusTeapot?","source":"net_http.txt","contains":"RFC 9110, 15.5.19 (Unused)","kind":"opaque"}
+{"q":"What layout does http.TimeFormat use for dates?","source":"net_http.txt","contains":"const TimeFormat = \"Mon, 02 Jan 2006 15:04:05 GMT\"","kind":"opaque"}
+{"q":"When should I pass http.NoBody?","source":"net_http.txt","contains":"var NoBody = noBody{}","kind":"opaque"}
+{"q":"What does http.DetectContentType base its answer on?","source":"net_http.txt","contains":"DetectContentType implements the algorithm described at","kind":"opaque"}
+{"q":"What does http.CanonicalHeaderKey do to a header name?","source":"net_http.txt","contains":"CanonicalHeaderKey returns the canonical format of the header key s","kind":"opaque"}
+{"q":"What does io.ErrShortWrite mean?","source":"io.txt","contains":"errors.New(\"short write\")","kind":"opaque"}
+{"q":"When do I get io.ErrUnexpectedEOF instead of io.EOF?","source":"io.txt","contains":"errors.New(\"unexpected EOF\")","kind":"opaque"}
+{"q":"What does io.ErrNoProgress signal?","source":"io.txt","contains":"errors.New(\"multiple Read calls return no data or error\")","kind":"opaque"}
+{"q":"What does io.NopCloser give me?","source":"io.txt","contains":"NopCloser returns a ReadCloser with a no-op Close method","kind":"opaque"}
+{"q":"What is the default value of bufio.MaxScanTokenSize?","source":"bufio.txt","contains":"MaxScanTokenSize = 64 * 1024","kind":"opaque"}
+{"q":"What does bufio.ErrTooLong mean?","source":"bufio.txt","contains":"errors.New(\"bufio.Scanner: token too long\")","kind":"opaque"}
+{"q":"When do I get bufio.ErrBufferFull?","source":"bufio.txt","contains":"errors.New(\"bufio: buffer full\")","kind":"opaque"}
+{"q":"What triggers bufio.ErrNegativeCount?","source":"bufio.txt","contains":"errors.New(\"bufio: negative count\")","kind":"opaque"}
+{"q":"What does flag.ErrHelp mean?","source":"flag.txt","contains":"errors.New(\"flag: help requested\")","kind":"opaque"}
+{"q":"What number is slog.LevelWarn?","source":"log_slog.txt","contains":"LevelWarn  Level = 4","kind":"opaque"}
+{"q":"What is bytes.MinRead?","source":"bytes.txt","contains":"const MinRead = 512","kind":"opaque"}
+{"q":"What does bytes.ToValidUTF8 do with bad bytes?","source":"bytes.txt","contains":"ToValidUTF8 treats s as UTF-8-encoded bytes","kind":"opaque"}
+{"q":"What does errors.ErrUnsupported stand for?","source":"errors.txt","contains":"New(\"unsupported operation\")","kind":"opaque"}
+{"q":"How do I use filepath.SkipDir?","source":"path_filepath.txt","contains":"var SkipDir error = fs.SkipDir","kind":"opaque"}
+{"q":"When does filepath.ErrBadPattern come back?","source":"path_filepath.txt","contains":"errors.New(\"syntax error in pattern\")","kind":"opaque"}
+{"q":"What are the bits in os.ModePerm?","source":"os.txt","contains":"Unix permission bits, 0o777","kind":"opaque"}
+{"q":"What does os.ErrDeadlineExceeded mean?","source":"os.txt","contains":"errDeadlineExceeded()","kind":"opaque"}
+{"q":"What does os.ErrProcessDone mean?","source":"os.txt","contains":"errors.New(\"os: process already finished\")","kind":"opaque"}
+{"q":"What does time.Kitchen print?","source":"time.txt","contains":"\"3:04PM\"","kind":"opaque"}
+{"q":"What is the time.RFC3339Nano layout string?","source":"time.txt","contains":"\"2006-01-02T15:04:05.999999999Z07:00\"","kind":"opaque"}
+{"q":"What is strconv.ErrRange?","source":"strconv.txt","contains":"errors.New(\"value out of range\")","kind":"opaque"}
+{"q":"What does strconv.ErrSyntax tell me?","source":"strconv.txt","contains":"errors.New(\"invalid syntax\")","kind":"opaque"}
+{"q":"What is exec.ErrDot and why do I hit it?","source":"os_exec.txt","contains":"errors.New(\"cannot run executable found relative to current directory\")","kind":"opaque"}
+{"q":"What does exec.ErrWaitDelay mean?","source":"os_exec.txt","contains":"errors.New(\"exec: WaitDelay expired before I/O complete\")","kind":"opaque"}
+{"q":"What does testing.AllocsPerRun return?","source":"testing.txt","contains":"AllocsPerRun returns the average number of allocations during calls to f","kind":"opaque"}
+{"q":"What does json.HTMLEscape change in the output?","source":"encoding_json.txt","contains":"HTMLEscape appends to dst the JSON-encoded src","kind":"opaque"}

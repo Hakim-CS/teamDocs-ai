@@ -1,12 +1,12 @@
 {
-  "recall_at_1": 0.4017094017094017,
-  "recall_at_k": 0.7094017094017094,
-  "mrr": 0.5236467236467237,
+  "recall_at_1": 0.5841584158415841,
+  "recall_at_k": 0.8217821782178217,
+  "mrr": 0.6797029702970298,
   "abstention": 0.5,
   "k": 5,
   "min_score": 0.55,
   "embedding_model": "nomic-embed-text",
   "embed_scheme": "nomic-embed-text|",
   "query_prefix": "",
-  "cases": 147
+  "cases": 232
 }
