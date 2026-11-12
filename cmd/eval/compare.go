@@ -82,15 +82,26 @@ func compare(a, b Results) (comparison, error) {
 	return cmp, nil
 }
 
-// only keeps the questions of one kind, so a slice can be compared on its own.
-func only(r Results, kind string) Results {
+// subset keeps the questions that satisfy keep, so a slice can be compared
+// on its own.
+func subset(r Results, keep func(CaseResult) bool) Results {
 	out := Results{Settings: r.Settings}
 	for _, c := range r.Cases {
-		if c.Kind == kind {
+		if keep(c) {
 			out.Cases = append(out.Cases, c)
 		}
 	}
 	return out
+}
+
+// only keeps the questions of one kind; "" is the original, untagged set.
+func only(r Results, kind string) Results {
+	return subset(r, func(c CaseResult) bool { return c.Kind == kind })
+}
+
+// inHalf keeps one half of the dev/test split.
+func inHalf(r Results, h string) Results {
+	return subset(r, func(c CaseResult) bool { return half(c.Question) == h })
 }
 
 func reciprocalRank(rank int) float64 {
@@ -211,12 +222,27 @@ func runCompare(pathA, pathB string) error {
 	fmt.Printf("MRR difference (B-A): %+.3f, 95%% CI [%+.3f, %+.3f]\n", cmp.MRRDiff, cmp.MRRLo, cmp.MRRHi)
 	fmt.Printf("Abstention flips (out-of-scope): %d now refused, %d now answered · McNemar exact p = %.4f\n",
 		len(cmp.Refused), len(cmp.Answered), cmp.AbstainP)
+	// The same paired statistics on slices, so a gain on one kind of
+	// question can be checked against a loss on another.
+	type view struct {
+		name string
+		pick func(Results) Results
+	}
+	views := []view{{"original (untagged)", func(r Results) Results { return only(r, "") }}}
 	for _, kind := range kinds {
-		if as, bs := only(a, kind), only(b, kind); len(as.Cases) > 0 {
-			if sc, err := compare(as, bs); err == nil {
-				fmt.Printf("%s questions (%d): %d gained, %d lost · McNemar exact p = %.4f · MRR %+.3f, 95%% CI [%+.3f, %+.3f]\n",
-					kind, len(as.Cases), len(sc.Gained), len(sc.Lost), sc.P, sc.MRRDiff, sc.MRRLo, sc.MRRHi)
-			}
+		views = append(views, view{kind, func(r Results) Results { return only(r, kind) }})
+	}
+	for _, h := range []string{"dev", "test"} {
+		views = append(views, view{h + " half", func(r Results) Results { return inHalf(r, h) }})
+	}
+	for _, s := range views {
+		as, bs := s.pick(a), s.pick(b)
+		if len(as.Cases) == 0 {
+			continue
+		}
+		if sc, err := compare(as, bs); err == nil {
+			fmt.Printf("%s (%d): %d gained, %d lost · McNemar exact p = %.4f · MRR %+.3f, 95%% CI [%+.3f, %+.3f]\n",
+				s.name, len(as.Cases), len(sc.Gained), len(sc.Lost), sc.P, sc.MRRDiff, sc.MRRLo, sc.MRRHi)
 		}
 	}
 	for _, q := range cmp.Gained {

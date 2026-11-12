@@ -93,6 +93,23 @@ func TestOnlyKeepsOneKind(t *testing.T) {
 	}
 }
 
+// The halves partition the questions, so dev and test rows add up to the run.
+func TestSubsetsPartition(t *testing.T) {
+	r := Results{Cases: []CaseResult{
+		{Question: "a", Source: "x.txt", Kind: kindIdentifier},
+		{Question: "b", Source: "x.txt"},
+		{Question: "c", Source: "x.txt"},
+		{Question: "d"},
+	}}
+	dev, test := inHalf(r, "dev"), inHalf(r, "test")
+	if len(dev.Cases)+len(test.Cases) != len(r.Cases) {
+		t.Errorf("dev %d + test %d != %d", len(dev.Cases), len(test.Cases), len(r.Cases))
+	}
+	if got := only(r, ""); len(got.Cases) != 3 {
+		t.Errorf("questions without a kind = %d, want 3", len(got.Cases))
+	}
+}
+
 func TestCompareListsAbstentionFlips(t *testing.T) {
 	a := Results{Cases: []CaseResult{
 		{Question: "refused 1", Hits: 3},

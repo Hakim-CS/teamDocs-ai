@@ -27,7 +27,7 @@ Measured by `go run ./cmd/eval` over 202 in-scope and 30 out-of-scope questions 
 These are honest numbers for dense vector search over declaration-aware chunks, not a finished system. The eval shows *where* it still fails:
 
 - **Mostly ranking.** 31 of the 36 misses retrieve the right file but rank the wrong passage higher. The other 5 retrieve a different file altogether (it was 1 before the chunking change, see below).
-- **Identifier questions are nearly solved, but not at rank 1.** Dense search finds all 50 named-API questions in the top 5 and 33 of 35 opaque ones (`sql.ErrNoRows`, `slog.LevelWarn`), because every chunk starts with the declaration and the question repeats its name. The room left is ranking: Recall@1 is 0.900 and 0.743. That is the only place a keyword leg could still help, and it can show up in MRR and Recall@1, not Recall@5.
+- **Identifier questions are nearly solved, but not at rank 1.** Dense search finds all 50 named-API questions in the top 5 and 33 of 35 opaque ones (`sql.ErrNoRows`, `slog.LevelWarn`), because every chunk starts with the declaration and the question repeats its name. The room left is ranking: Recall@1 is 0.900 and 0.743. A keyword leg could only help there through MRR and Recall@1, not Recall@5; the second hybrid attempt tested exactly that and did not (see its experiment).
 - **Near-domain questions.** Only 4 of the 18 questions about libraries and tools these packages don't document (errgroup, YAML, bcrypt, pprof) are refused; they score as close to the docs as real questions do.
 
 That is what the next retrieval changes target (see [Roadmap](#roadmap)), and the gate makes each one prove itself.
@@ -130,6 +130,24 @@ Vector search can miss exact identifiers, so Postgres full-text search (a genera
 - **The control behaves.** The same AND query with another question's words gives no gain (+1 −3), so a gain needs relevant words. The OR form with another question's words drops recall@5 to 0.462.
 - **Task 4's gate matters once keyword hits exist.** With the AND variant, a per-hit floor deletes hits the per-query rule keeps: +2 recall@5 at 0.55 (p = 0.50) and +4 at 0.575 (p = 0.125). Directional only.
 - **The eval cannot settle it.** 117 in-scope questions cannot show +6 −1 at p < 0.05, and the golden set had almost no identifier-style questions, which are what hybrid targets. Those slices have since been added (see The eval). Vector-only already finds nearly all of them in the top 5, so a second attempt has to show its gain in ranking (Recall@1 and MRR). The variants were throwaway `go build -overlay` builds; the implementation is not in this repo.
+
+### Experiment: hybrid search, second attempt (no gain, not shipped)
+
+The first attempt could not be judged: the question set had few identifier questions, and 117 questions are too few. So the set was extended (50 `identifier` + 35 `opaque` questions) and the AND variant was retried with a weight on the keyword list: reciprocal rank fusion `1/(60+rank_vector) + w/(60+rank_keyword)`, 40 candidates per list. The ship rule was written before the first run: the chosen variant must show an MRR interval above zero on all 202 in-scope questions, no significant harm on the original 117, no AUC loss, no abstention loss and at most +15 ms p95. Variants were fixed in advance (w = 1.0 and 0.5) and picked on the dev half; the test half only confirms direction. All runs used the same database, floor off, and the production vector-only binary as the baseline.
+
+| Run (floor off, 202 in-scope) | Recall@1 | Recall@5 | MRR | Recall@5 flips vs vector-only | MRR change [95% CI] |
+| --- | ---: | ---: | ---: | --- | --- |
+| Vector-only | 0.589 | 0.827 | 0.685 | | |
+| **Hybrid, w = 1.0 (dev pick)** | 0.564 | 0.851 | 0.679 | +6 −1 (p = 0.125) | −0.005 [−0.033, +0.023] |
+| Hybrid, w = 0.5 | 0.564 | 0.842 | 0.673 | +4 −1 (p = 0.375) | −0.011 [−0.038, +0.015] |
+| Control: keyword leg fed another question | 0.559 | 0.817 | 0.656 | +1 −3 (p = 0.625) | −0.028 [−0.046, −0.013] |
+| Control: w = 0 through the hybrid code | 0.589 | 0.827 | 0.685 | +0 −0 | 0.000 |
+
+- **The rule fails.** The MRR interval for the chosen variant includes zero, so nothing ships.
+- **The controls behave.** With w = 0 the hybrid code reproduces vector-only exactly, and a keyword leg that sees the wrong question significantly hurts MRR, so the keyword leg is doing real work.
+- **It trades rank 1 for recall.** Hybrid finds six passages the vectors ranked below 5 (reading a file line by line, creating a temporary directory, HTTP client timeouts), but it also pushes correct passages out of first place (`strconv.ParseBool` 1 → 4, setting a cookie 1 → 5). On the identifier slice MRR falls 0.950 → 0.913 (−0.037 [−0.083, 0.000]; three questions lose rank 1). On the opaque slice nothing changes (0 flips, identical MRR).
+- **Dev and test disagree on size, not direction of recall.** Recall@5: dev +1 −1, test +5 −0 (p = 0.0625). MRR: dev 0.000, test −0.010.
+- **What this suggests (not shown).** The extra passages sit at rank 2 to 5, so a second stage that reorders the top 20, such as an LLM rerank, could keep them without losing rank 1. That is the next experiment, with the same kind of rule.
 
 ## How it works
 
@@ -253,8 +271,8 @@ Changing the embedding model or dimension requires a fresh table: `docker compos
 Each step is judged by the eval, not by intuition:
 
 1. **Decide the floor** (see Relevance floor). The gate now tolerates two questions of abstention noise; a gate on the separation AUC would be sharper.
-2. **Hybrid retrieval, second attempt:** the identifier slices now exist (50 + 35 questions) and vector-only is already strong on them (Recall@5 1.000 and 0.943), so the test can only be about ranking: Recall@1 0.900 and 0.743, MRR 0.950 and 0.815. Next: retry the full-text AND variant with a weight on the keyword list under a ship rule fixed in advance, judged on those slices and on the original 117, so a gain on identifiers cannot hide a loss elsewhere (see the experiment above).
-3. **Experiments:** other embedding models, and an LLM rerank of the top 20. Each ships only if `-compare` shows a significant gain.
+2. **Hybrid retrieval: tried twice, not shipped** (see the two experiments above). The second attempt, judged on ranking with a rule fixed in advance, was flat on MRR.
+3. **Experiments:** an LLM rerank of the top 20 (hybrid recovered passages at rank 2 to 5 that a reranker could promote) and other embedding models. Each ships only if `-compare` shows a significant gain.
 4. **Verified citations:** structured sources in the SSE stream, checked against the chunks actually supplied.
 5. **Server-side sessions, upload auth, rate limiting.**
 
